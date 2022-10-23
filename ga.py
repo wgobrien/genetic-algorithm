@@ -8,7 +8,7 @@ import os
 
 class GeneticAlgorithm:
 
-    def __init__(self, model, parameters, boundaries, X_scale=None, y_scale=None, pop_size=10):
+    def __init__(self, model, parameters, boundaries, X_scale=None, y_scale=None, pop_size=10, precision=5):
         '''
         model - model to evalute fitness on (may need to adjust model_fitness() to work w different models);
 
@@ -21,6 +21,8 @@ class GeneticAlgorithm:
         y_scale - Scaler model for labels (must match data used for model training)
 
         pop_size - default=10, number of samples to keep in population at a time
+
+        precision - degree of precision to round search
         '''
 
         # set upon initialization of object
@@ -33,7 +35,11 @@ class GeneticAlgorithm:
         self.y_scale = y_scale
         self.pop_size = pop_size
         self.population = self._initialize_pop(pop_size)
-
+        
+        # initialized in run
+        self._gen = None # save for export data
+        self._exp = None
+        self._precision = precision
 
     def _initialize_pop(self, size):
         '''
@@ -70,8 +76,7 @@ class GeneticAlgorithm:
         output:
             prediction of the model given the feature set (scaler)
         '''
-
-        if callable(self.model) and (isinstance(self.model, type(self.model_fitness)) or isinstance(self.model, type(rastrigin))):
+        if callable(self.model) and (str(type(self.model)) == '<class \'function\'>'):
             prediction = self.model(parameters)
         else:
             parameters = self.X_scale.transform([list(parameters.values())])
@@ -97,8 +102,7 @@ class GeneticAlgorithm:
         output:
             prediction of the model given the feature set (scaler)
         '''
-        
-        if callable(self.model) and (isinstance(self.model, type(self.model_fitness)) or isinstance(self.model, type(rastrigin))):
+        if callable(self.model) and (str(type(self.model)) == '<class \'function\'>'):
             prediction = self.model(parameters)
         else:
             parameters = self.X_scale.transform([list(parameters.values())])
@@ -110,7 +114,7 @@ class GeneticAlgorithm:
         return prediction
 
 
-    def sort_pop(self, population):
+    def _sort_pop(self, population):
         '''
         Takes a list of dictionaries (parameter : value pairs) and returns
         sorted list by model_fitness. Output list will be in order of
@@ -167,7 +171,7 @@ class GeneticAlgorithm:
             if draw <= cumulative:
                 return individual, idx
 
-    def mutation(self, individual, mutation_prob):
+    def _mutation(self, individual, mutation_prob):
         '''
         Generates mutation of indiviudal by adding a random number in [-bound, bound]
         to each value in the individual's feature set. The bound is determined
@@ -192,7 +196,7 @@ class GeneticAlgorithm:
         return individual
 
 
-    def crossover(self, a, b):
+    def _crossover(self, a, b):
         '''
         Crossover function takes two given individuals and
         returns a dictionary of {paramter : value} pairs based on averages.
@@ -210,12 +214,12 @@ class GeneticAlgorithm:
         return cross
 
 
-    def mating_pool(self):
+    def _mating_pool(self):
         '''
         Generates a new population using selection, crossover, and mutation techniques.
         '''
         mpool = []
-        sorted_pop = self.sort_pop(self.population)
+        sorted_pop = self._sort_pop(self.population)
 
         if self.select == self.roulette_select:
             # roulette selection, sum of the population's total fitness
@@ -240,8 +244,8 @@ class GeneticAlgorithm:
             else:
                 mutation_prob = None
 
-            x_new = self.crossover(x1, x2)
-            mpool.append(self.mutation(x_new, mutation_prob))
+            x_new = self._crossover(x1, x2)
+            mpool.append(self._mutation(x_new, mutation_prob))
 
         # Keeps the highest performing individuals from the previous pool, makes sure
         # we don't skip past the best individual (allows for higher exploration rates)
@@ -250,37 +254,38 @@ class GeneticAlgorithm:
         return mpool
 
 
-    def run(self, mode='maximize', select='rank', mutation_rate='dynamic', generations=500, exploration=.25, keep_top=1, verbose=False):
+    def run(self, mode='maximize', select='rank', boltzmann=True, generations=500, exploration=.25, keep_top=1, verbose=False):
         '''
         inputs:
             mode - minimize or maximize input function (porosity=minimize, tensile_strength=maximize)
 
             select - option to choose selection technique between roulette and rank selection
 
-            mutation_rate - have the option to set the probability at which an individual mutates
+            boltzmann - entropy-Boltzmann selection, 
 
             generations - set max number of generations to run
 
-            exploration - only applicable for dynamic mutation rate, tells how much to explore
-            vs exploit (higher will try more, might not converge as consistently)
+            exploration - For rank or roulette, the normal mutation rate. For entropy-Boltzmann selection, tells how much to explore
+            vs exploit (higher will increase perturbation for worse fitness (expand search space),
+            lower value will narrow search space for worse fitness)
 
             verbose - option to print generation #'s and populations for each generation
 
             keep_top - with every generation, keeps the top N individuals for the next generation
+
         output:
             dictionary feature set of the highest performing individual in the final population
         '''
-        self.gen = generations # save for export data
-        self.exp = exploration
+        self._gen = generations # save for export data
+        self._exp = exploration
 
         # set mutation rate before each run
-        if mutation_rate == 'dynamic':
+        if boltzmann:
             self.dynamic = True
-            # mutation rate set to exploration rate in dynamic mode
-            self.mutation_rate = exploration
         else:
             self.dynamic = False
-            self.mutation_rate = mutation_rate
+        
+        self.mutation_rate = exploration
 
         # set selection technique
         if select == 'roulette':
@@ -307,15 +312,16 @@ class GeneticAlgorithm:
             print('Genetic Algorithm Walk\n----------------------')
         for x in range(generations):
             # append prediction to convergence history (lets us analyze converge behavior)
-            best_hist.append(self.model_predict(self.sort_pop(self.population)[-1]))
+            best = round(self.model_predict(self._sort_pop(self.population)[-1]),self._precision)
+            best_hist.append(best)
             # generate new mating pool
-            self.population = self.mating_pool()
+            self.population = self._mating_pool()
             if verbose:
                 print(f'\nGENERATION {x+1}')
                 for indiviudal in self.population:
                     print(indiviudal)
         # The last item in the sorted population is the highest performer
-        best = self.sort_pop(self.population)[-1]
+        best = self._sort_pop(self.population)[-1]
         return best, best_hist
 
 
@@ -331,11 +337,14 @@ class GeneticAlgorithm:
         if best==None:
             best, _ = self.run()
         # open output file for writing
-        out_path = os.path.join(os.path.dirname(__file__), '/report/optimize_parameters.txt')
+        out_path = os.path.join(os.path.dirname(__file__), 'report/optimize_parameters.txt')
 
         if os.path.exists(out_path):
             out = open(out_path, 'a')
         else:
+            report_dir = os.path.exists(os.path.join(os.path.dirname(__file__), 'report'))
+            if not report_dir:
+                os.makedirs(report_dir)
             out = open(out_path, 'w')
             out.write('================================================='
                       '\n             Optimal Paramter Report'
@@ -344,7 +353,7 @@ class GeneticAlgorithm:
                       '\nGA run outputs, and which GA settings were used.\n')
 
         if self.dynamic:
-            mr = f'dynamic >> exploration rate: {self.exp}'
+            mr = f'dynamic >> exploration rate: {self._exp}'
         else:
             mr = str(self.mutation_rate)
 
@@ -355,7 +364,7 @@ class GeneticAlgorithm:
             f'\n{type(self.model).__name__} Model\n-------------------------------------------------'
             f'\nGA Parameters\n-------------'
             f'\nPopulation Size: {self.pop_size}'
-            f'\nGenerations: {self.gen}'
+            f'\nGenerations: {self._gen}'
             f'\nSelect: {self.select.__name__}'
             f'\nMutation Rate: {mr}'
             f'\nKeep Top: {self.top}'
@@ -370,49 +379,8 @@ class GeneticAlgorithm:
             f'\n{self.model_predict(best)}'
             '\n=================================================\n'
             )
-        print('---------------------------------------\nPrediction:', self.model_predict(best))
+        print('---------------------------------------\nPrediction:', round(self.model_predict(best), self._precision))
         print('=======================================')
 
         out.close()
-
-if __name__ == '__main__':
-    # path to models
-    models_path = os.path.join(os.path.dirname(__file__), '../models/')
-
-    # Load svr model
-    #svr1_path = os.path.join(models_path, 'svr_model.pkl')
-    #SVR = joblib.load(svr1_path)
-
-    # Load scaler models for predictions
-    X_scale_path = os.path.join(models_path, 'scalers/X_scale.pkl')
-    y_scale_path = os.path.join(models_path, 'scalers/y_scale.pkl')
-    #X_scale = joblib.load(X_scale_path)
-    #y_scale = joblib.load(y_scale_path)
-
-    # Create GA object
-    parameters = ['LaserPowerHatch', 'LaserSpeedHatch', 'HatchSpacing', 'LaserPowerContour']
-    boundaries = [(100, 400), (600, 1200), (.1,.25), (30,200)]
-    #ga = GeneticAlgorithm(SVR, parameters, boundaries, X_scale, y_scale, pop_size=50)
-
-    # Test make prediction
-    # predict = ga.model_predict({'LaserPowerHatch':300, 'LaserSpeedHatch':1200, 'HatchSpacing': .15, 'LaserPowerContour': 140})
-
-    # Run the algorithm to find optimal parameter set
-    # best_performer, converge_hist = ga.run(mode='minimize'
-    #                                        , select='rank'
-    #                                        , mutation_rate='dynamic'
-    #                                        , generations=1000
-    #                                        , exploration=.3
-    #                                        , keep_top=1
-    #                                        , verbose=True)
-    # ga.export(best_performer) # best is optional, can have export run the algorithm instead
-    ga = GeneticAlgorithm(rastrigin, ['x','y','z'], [(-5.12,5.12),(-5.12,5.12),(-5.12,5.12)], pop_size=100)
-    b, n = ga.run(mode='minimize'
-                  , select='rank'
-                  , mutation_rate='dynamic'
-                  , generations=2000
-                  , exploration=.35
-                  , keep_top=1
-                  , verbose=True)
-    ga.export(b)
     
